@@ -1,0 +1,185 @@
+# Curated, genuinely non-trivial Apache Superset issues for Devin to remediate.
+# Each requires understanding the code, touching multiple files, and running
+# the linter/type-checker to verify correctness.
+# Run: python seed/create_issues.py
+
+label: devin:auto-remediate
+
+issues:
+  - title: "fix(deprecation): replace datetime.utcnow() with datetime.now(timezone.utc) in superset/commands/report/execute.py"
+    body: |
+      ## Problem
+      `superset/commands/report/execute.py` calls `datetime.utcnow()` 21 times.
+      This method is deprecated since Python 3.12 and returns a timezone-naive datetime,
+      which can cause subtle comparison bugs when mixed with timezone-aware datetimes.
+      The correct replacement is `datetime.now(timezone.utc)`.
+
+      ## Location
+      Run: `grep -n "datetime.utcnow" superset/commands/report/execute.py`
+      Expected: ~21 matches.
+
+      Also check these files for additional occurrences:
+      - `superset/utils/cache.py`
+      - `superset/utils/dates.py`
+      - `superset/commands/logs/prune.py`
+      - `superset/commands/report/log_prune.py`
+
+      ## Expected Fix
+      1. Ensure `from datetime import datetime, timezone` is imported in each file.
+      2. Replace every `datetime.utcnow()` with `datetime.now(timezone.utc)`.
+      3. Do NOT change any call signatures or database column types — this is purely
+         a construction-site change.
+
+      ## Why safe
+      `datetime.utcnow()` and `datetime.now(timezone.utc)` both return the current UTC
+      time. The only difference is the new version is timezone-aware. Existing comparisons
+      between two aware datetimes work correctly; existing comparisons with naive datetimes
+      (stored in the DB) may need `.replace(tzinfo=None)` if tests fail — check test output.
+
+      ## Acceptance Criteria
+      - `grep -rn "datetime.utcnow" superset/commands/report/execute.py` returns no matches
+      - `grep -rn "datetime.utcnow" superset/utils/cache.py superset/utils/dates.py superset/commands/logs/prune.py superset/commands/report/log_prune.py` returns no matches
+      - `python -m py_compile superset/commands/report/execute.py` passes
+      - `ruff check superset/commands/report/execute.py` passes
+      - Existing unit tests pass
+
+  - title: "chore(typing): replace deprecated Dict/List/Optional imports with builtin generics in superset/mcp_service/app.py"
+    body: |
+      ## Problem
+      `superset/mcp_service/app.py` imports `Dict`, `List` from `typing` (line 26):
+      ```python
+      from typing import Any, Callable, Dict, List, Sequence, Set
+      ```
+      These are deprecated since Python 3.9 — the builtins `dict`, `list` should be
+      used directly for type hints. The file uses `Dict[str, Any]` in ~5 function
+      signatures and `List[Any]` in ~3 more.
+
+      ## Location
+      Run: `grep -n "Dict\[\\|List\[\\|from typing import" superset/mcp_service/app.py`
+
+      ## Expected Fix
+      1. Remove `Dict` and `List` from the `typing` import line.
+         Keep `Any`, `Callable`, `Sequence`, `Set` — those still come from `typing`.
+      2. Replace all `Dict[K, V]` → `dict[K, V]` in the file.
+      3. Replace all `List[T]` → `list[T]` in the file.
+      4. Verify no other deprecated typing aliases (`Tuple`, `Optional`) are used.
+         If found, fix those too.
+
+      ## Why safe
+      `dict[K, V]` and `list[T]` are fully equivalent to `Dict[K, V]` and `List[T]`
+      at runtime in Python 3.9+. Superset requires Python 3.10+, so this is always safe.
+
+      ## Acceptance Criteria
+      - `grep -n "Dict\[\\|List\[" superset/mcp_service/app.py` returns no matches
+      - `from typing import` in `mcp_service/app.py` no longer includes `Dict` or `List`
+      - `mypy superset/mcp_service/app.py --ignore-missing-imports` passes
+      - `ruff check superset/mcp_service/app.py` passes
+      - All existing tests pass
+
+  - title: "fix(safety): add explicit encoding='utf-8' to open() calls in superset/cli/importexport.py"
+    body: |
+      ## Problem
+      `superset/cli/importexport.py` opens files 6 times without specifying an encoding:
+      ```python
+      with open(path) as file:         # line 155
+      with open(path) as file:         # line 192
+      with open(dashboard_file, "w") as data_stream:  # line 231
+      with open(datasource_file, "w") as data_stream: # line 283
+      with open(path_) as file:        # line 325
+      with open(path_) as file:        # line 379
+      ```
+      Without `encoding=`, Python uses the system locale encoding (which may be latin-1
+      or cp1252 on some systems), causing silent data corruption on non-ASCII content
+      (dashboard titles, chart labels, etc.).
+
+      ## Expected Fix
+      Add `encoding="utf-8"` to all 6 `open()` calls in `superset/cli/importexport.py`.
+      The file handles YAML/JSON import-export of dashboards and datasources — all of
+      which are UTF-8 by convention in Superset.
+
+      Also check and fix `superset/cli/export_example.py` (2 occurrences, lines 63, 68).
+
+      ## Why safe
+      Adding `encoding="utf-8"` makes the existing implicit behavior explicit. Superset
+      YAML/JSON exports are always UTF-8. No behavior change on systems already defaulting
+      to UTF-8; prevents corruption on systems that don't.
+
+      ## Acceptance Criteria
+      - `grep -n "open(" superset/cli/importexport.py` shows `encoding="utf-8"` on all text-mode opens
+      - `grep -n "open(" superset/cli/export_example.py` shows `encoding="utf-8"` on all text-mode opens
+      - Binary mode opens (`"rb"`, `"wb"`) are left unchanged
+      - `ruff check superset/cli/importexport.py superset/cli/export_example.py` passes
+      - Existing CLI tests pass
+
+  - title: "fix(lint): replace `== None` / `!= None` with `is None` / `is not None` in superset/security/manager.py"
+    body: |
+      ## Problem
+      `superset/security/manager.py` contains SQLAlchemy filter expressions using
+      `== None` and `!= None` (around lines 1752–1754), suppressed with `# noqa: E711`:
+      ```python
+      .filter(DatasetUser.dataset_id == None, Dataset.created_by_fk != None)  # noqa: E711
+      ```
+      Ruff rule E711 flags these because `== None` uses equality comparison instead of
+      identity. The SQLAlchemy-correct way to write NULL checks is `.is_(None)` or
+      `.isnot(None)` for ORM column expressions.
+
+      Run: `grep -n "== None\|!= None" superset/security/manager.py`
+
+      ## Expected Fix
+      Replace the SQLAlchemy filter conditions:
+      - `Column == None` → `Column.is_(None)`
+      - `Column != None` → `Column.isnot(None)`
+
+      Remove the `# noqa: E711` suppression comments after fixing.
+
+      Also run: `grep -rn "== None\|!= None" superset/daos/ --include="*.py"` to find
+      any similar patterns in the DAOs and fix those too.
+
+      ## Why safe
+      SQLAlchemy translates both forms to `IS NULL` / `IS NOT NULL` in SQL, but
+      `.is_(None)` / `.isnot(None)` is the explicit, lint-clean way. No behavior change.
+
+      ## Acceptance Criteria
+      - `grep -n "== None\|!= None" superset/security/manager.py` returns no matches
+      - `grep -rn "# noqa: E711" superset/security/manager.py` returns no matches
+      - `ruff check superset/security/manager.py` passes with no E711 errors
+      - All existing security manager tests pass
+
+  - title: "chore(typing): replace Union[X, Y] with X | Y syntax in superset/reports/notifications/slack.py and superset/annotation_layers/annotations/schemas.py"
+    body: |
+      ## Problem
+      Two files still use the old `Union[X, Y]` syntax from `typing` instead of
+      the Python 3.10+ `X | Y` union syntax:
+
+      1. `superset/reports/notifications/slack.py` — imports `Union` from typing and
+         uses it in function signatures.
+      2. `superset/annotation_layers/annotations/schemas.py` — imports `Union` and
+         uses it in schema field type hints.
+
+      Run to verify:
+      ```bash
+      grep -n "Union" superset/reports/notifications/slack.py
+      grep -n "Union" superset/annotation_layers/annotations/schemas.py
+      ```
+
+      ## Expected Fix
+      For each file:
+      1. Find all `Union[X, Y]` usages and replace with `X | Y`.
+      2. Find all `Union[X, Y, Z]` and replace with `X | Y | Z`.
+      3. Remove `Union` from the `from typing import` line.
+      4. If `Union` was the only import from `typing`, remove the entire import line.
+      5. Ensure `from __future__ import annotations` is present at the top of the file
+         (needed for `|` syntax in Python 3.9 compatibility mode, though Superset
+         requires 3.10+).
+
+      ## Why safe
+      `X | Y` and `Union[X, Y]` are semantically identical. This is a pure style
+      modernization with no runtime effect.
+
+      ## Acceptance Criteria
+      - `grep -n "Union" superset/reports/notifications/slack.py` returns no matches
+      - `grep -n "Union" superset/annotation_layers/annotations/schemas.py` returns no matches
+      - `mypy superset/reports/notifications/slack.py --ignore-missing-imports` passes
+      - `mypy superset/annotation_layers/annotations/schemas.py --ignore-missing-imports` passes
+      - `ruff check superset/reports/notifications/slack.py superset/annotation_layers/annotations/schemas.py` passes
+      - All existing tests for these modules pass

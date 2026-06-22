@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Devin Remediation Orchestrator</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --card: #1a1d27;
+      --border: #2d3147;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #6366f1;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #f59e0b;
+      --blue: #3b82f6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+    header { background: var(--card); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+    header h1 { font-size: 1.25rem; font-weight: 700; }
+    .badge { background: var(--accent); color: white; font-size: 0.7rem; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+    main { padding: 2rem; max-width: 1400px; margin: 0 auto; }
+    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+    .metric-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+    .metric-card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+    .metric-card .value { font-size: 2rem; font-weight: 700; }
+    .metric-card .sub { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
+    .green { color: var(--green); }
+    .red { color: var(--red); }
+    .yellow { color: var(--yellow); }
+    .blue { color: var(--blue); }
+    section { margin-bottom: 2rem; }
+    section h2 { font-size: 1rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th { text-align: left; padding: 0.5rem 0.75rem; color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+    td { padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.03); }
+    .status-pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.7rem; font-weight: 600; }
+    .status-RUNNING, .status-QUEUED, .status-DEVIN_SESSION_CREATED { background: #1e40af33; color: var(--blue); }
+    .status-READY_FOR_REVIEW, .status-PR_OPENED, .status-MERGED, .status-CI_RUNNING { background: #16653433; color: var(--green); }
+    .status-FAILED, .status-BLOCKED, .status-NEEDS_HUMAN_REVIEW { background: #7f1d1d33; color: var(--red); }
+    .status-NEW { background: #44403c33; color: var(--yellow); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .chat-box { display: flex; flex-direction: column; gap: 1rem; }
+    .chat-input-row { display: flex; gap: 0.75rem; }
+    .chat-input-row input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; color: var(--text); font-size: 0.9rem; }
+    .chat-input-row input:focus { outline: none; border-color: var(--accent); }
+    .chat-input-row button { background: var(--accent); color: white; border: none; border-radius: 8px; padding: 0.75rem 1.5rem; cursor: pointer; font-weight: 600; font-size: 0.9rem; white-space: nowrap; }
+    .chat-input-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .chat-examples { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .chat-examples button { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 999px; padding: 4px 12px; font-size: 0.75rem; cursor: pointer; }
+    .chat-examples button:hover { border-color: var(--accent); color: var(--text); }
+    .chat-result { display: none; }
+    .chat-result.visible { display: block; }
+    .chat-meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .chart-container { position: relative; height: 280px; }
+    .error-msg { color: var(--red); font-size: 0.875rem; padding: 0.75rem; background: #7f1d1d22; border-radius: 8px; border: 1px solid #7f1d1d44; }
+    .refresh-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 4px 12px; font-size: 0.75rem; cursor: pointer; float: right; margin-top: -0.25rem; }
+    .refresh-btn:hover { border-color: var(--accent); color: var(--text); }
+    .two-col { display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; }
+    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+    .sql-block { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; font-family: monospace; font-size: 0.75rem; color: var(--muted); white-space: pre-wrap; word-break: break-all; margin-top: 0.75rem; max-height: 120px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🤖 Devin Remediation Orchestrator</h1>
+    <span class="badge" id="mode-badge">live</span>
+    <span style="flex:1"></span>
+    <a href="/docs" style="color:var(--muted);font-size:0.85rem">API Docs →</a>
+  </header>
+
+  <main>
+    <!-- Metrics -->
+    <div class="metrics-grid" id="metrics-grid">
+      <div class="metric-card"><div class="label">Total Runs</div><div class="value blue" id="m-total">—</div></div>
+      <div class="metric-card"><div class="label">Active</div><div class="value yellow" id="m-active">—</div></div>
+      <div class="metric-card"><div class="label">Successful</div><div class="value green" id="m-success">—</div></div>
+      <div class="metric-card"><div class="label">Failed / Blocked</div><div class="value red" id="m-failed">—</div></div>
+      <div class="metric-card"><div class="label">Success Rate</div><div class="value green" id="m-rate">—</div></div>
+      <div class="metric-card"><div class="label">Mean Time → PR</div><div class="value" id="m-mttp">—</div><div class="sub">seconds</div></div>
+    </div>
+
+    <div class="two-col">
+      <!-- Runs table -->
+      <section>
+        <h2>Remediation Runs <button class="refresh-btn" onclick="loadRuns()">↻ Refresh</button></h2>
+        <div class="card">
+          <table id="runs-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Issue</th>
+                <th>Classification</th>
+                <th>Status</th>
+                <th>PR</th>
+                <th>Started</th>
+              </tr>
+            </thead>
+            <tbody id="runs-tbody">
+              <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:2rem">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Throughput chart -->
+      <section>
+        <h2>Weekly Throughput</h2>
+        <div class="card">
+          <div class="chart-container">
+            <canvas id="throughput-chart"></canvas>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Analytics chatbot -->
+    <section>
+      <h2>📊 Analytics Chatbot — Ask Devin anything about remediation metrics</h2>
+      <div class="card chat-box">
+        <div class="chat-examples">
+          <button onclick="askQuestion(this.textContent)">Show Devin remediation success rate by week as a graph</button>
+          <button onclick="askQuestion(this.textContent)">How many issues did Devin fix this month?</button>
+          <button onclick="askQuestion(this.textContent)">Show failed Devin sessions by reason</button>
+          <button onclick="askQuestion(this.textContent)">Graph PRs opened per week</button>
+          <button onclick="askQuestion(this.textContent)">Which issue types consume the most ACUs?</button>
+          <button onclick="askQuestion(this.textContent)">What is average time from issue label to PR opened?</button>
+          <button onclick="askQuestion(this.textContent)">Show active Devin sessions</button>
+        </div>
+        <div class="chat-input-row">
+          <input type="text" id="chat-input" placeholder="Ask a question about remediation metrics…" onkeydown="if(event.key==='Enter')submitQuery()" />
+          <button id="chat-btn" onclick="submitQuery()">Ask Devin →</button>
+        </div>
+        <div class="chat-result" id="chat-result">
+          <div class="chat-meta" id="chat-meta"></div>
+          <div class="chart-container" id="chat-chart-container" style="display:none">
+            <canvas id="chat-chart"></canvas>
+          </div>
+          <div id="chat-table-container" style="display:none"></div>
+          <details style="margin-top:0.75rem">
+            <summary style="cursor:pointer;font-size:0.8rem;color:var(--muted)">Generated SQL</summary>
+            <div class="sql-block" id="chat-sql"></div>
+          </details>
+        </div>
+        <div class="error-msg" id="chat-error" style="display:none"></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    let throughputChartInst = null;
+    let chatChartInst = null;
+
+    // ── Utilities ──────────────────────────────────────────────────────────────
+    function fmtDate(iso) {
+      if (!iso) return '—';
+      return new Date(iso).toLocaleString();
+    }
+    function pill(status) {
+      return `<span class="status-pill status-${status}">${status}</span>`;
+    }
+    function fmtSecs(s) {
+      if (s == null) return '—';
+      if (s < 60) return `${Math.round(s)}s`;
+      if (s < 3600) return `${Math.round(s/60)}m`;
+      return `${(s/3600).toFixed(1)}h`;
+    }
+
+    // ── Metrics ────────────────────────────────────────────────────────────────
+    async function loadMetrics() {
+      try {
+        const r = await fetch('/metrics/summary');
+        const d = await r.json();
+        document.getElementById('m-total').textContent = d.total_runs;
+        document.getElementById('m-active').textContent = d.active_runs;
+        document.getElementById('m-success').textContent = d.successful_runs;
+        document.getElementById('m-failed').textContent = d.failed_runs;
+        document.getElementById('m-rate').textContent = (d.success_rate * 100).toFixed(1) + '%';
+        document.getElementById('m-mttp').textContent = fmtSecs(d.mean_time_to_pr_seconds);
+      } catch(e) { console.error('metrics error', e); }
+    }
+
+    // ── Runs table ─────────────────────────────────────────────────────────────
+    async function loadRuns() {
+      const tbody = document.getElementById('runs-tbody');
+      try {
+        const r = await fetch('/runs?limit=50');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        if (!d.items || d.items.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:2rem">No runs yet. Trigger an event using /simulate/issue-labeled or label a GitHub issue.</td></tr>';
+          return;
+        }
+        const rows = d.items.map(run => {
+          const num = run.issue_number || '?';
+          const title = String(run.issue_title || '');
+          const titleShort = title.length > 50 ? title.slice(0, 50) + '…' : title;
+          const issueUrl = run.issue_url || '#';
+          const cls = run.classification || '—';
+          const statusPill = pill(run.status || 'UNKNOWN');
+          const prCell = run.pr_url
+            ? '<a href="' + run.pr_url + '" target="_blank">View PR &#8594;</a>'
+            : '—';
+          const started = fmtDate(run.started_at);
+          return '<tr>'
+            + '<td><span style="color:var(--muted)">#' + num + '</span></td>'
+            + '<td><a href="' + issueUrl + '" target="_blank">' + titleShort + '</a></td>'
+            + '<td><span style="color:var(--muted);font-size:0.8rem">' + cls + '</span></td>'
+            + '<td>' + statusPill + '</td>'
+            + '<td>' + prCell + '</td>'
+            + '<td style="color:var(--muted);font-size:0.8rem">' + started + '</td>'
+            + '</tr>';
+        });
+        tbody.innerHTML = rows.join('');
+      } catch(e) {
+        console.error('runs error', e);
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--red);padding:1rem">Error loading runs: ' + e.message + '</td></tr>';
+      }
+    }
+
+    // ── Throughput chart ───────────────────────────────────────────────────────
+    async function loadThroughput() {
+      try {
+        const r = await fetch('/metrics/throughput?granularity=week');
+        const d = await r.json();
+        if (throughputChartInst) throughputChartInst.destroy();
+        const ctx = document.getElementById('throughput-chart').getContext('2d');
+        throughputChartInst = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: d.data.map(x => x.period),
+            datasets: [
+              { label: 'Runs Started', data: d.data.map(x => x.runs_started), backgroundColor: '#6366f144', borderColor: '#6366f1', borderWidth: 1 },
+              { label: 'PRs Opened', data: d.data.map(x => x.prs_opened), backgroundColor: '#22c55e44', borderColor: '#22c55e', borderWidth: 1 },
+            ]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: '#94a3b8', boxWidth: 12 } } },
+            scales: {
+              x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#2d3147' } },
+              y: { ticks: { color: '#94a3b8' }, grid: { color: '#2d3147' }, beginAtZero: true }
+            }
+          }
+        });
+      } catch(e) { console.error('throughput error', e); }
+    }
+
+    // ── Analytics chatbot ──────────────────────────────────────────────────────
+    function askQuestion(q) {
+      document.getElementById('chat-input').value = q;
+      submitQuery();
+    }
+
+    async function submitQuery() {
+      const input = document.getElementById('chat-input');
+      const question = input.value.trim();
+      if (!question) return;
+
+      const btn = document.getElementById('chat-btn');
+      btn.disabled = true;
+      btn.textContent = 'Asking Devin…';
+      document.getElementById('chat-error').style.display = 'none';
+      document.getElementById('chat-result').classList.remove('visible');
+
+      try {
+        const resp = await fetch('/analytics/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question })
+        });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+          const detail = data.detail || data;
+          document.getElementById('chat-error').textContent =
+            typeof detail === 'object' ? `Guard rejected query: ${detail.reason || JSON.stringify(detail)}` : String(detail);
+          document.getElementById('chat-error').style.display = 'block';
+          return;
+        }
+
+        renderChatResult(data);
+      } catch(e) {
+        document.getElementById('chat-error').textContent = `Error: ${e.message}`;
+        document.getElementById('chat-error').style.display = 'block';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Ask Devin →';
+      }
+    }
+
+    function renderChatResult(data) {
+      document.getElementById('chat-sql').textContent = data.generated_sql || '';
+      document.getElementById('chat-meta').innerHTML =
+        `<strong>Chart type:</strong> ${data.chart_type} &nbsp;|&nbsp; ${data.explanation}`;
+
+      const chartContainer = document.getElementById('chat-chart-container');
+      const tableContainer = document.getElementById('chat-table-container');
+
+      if (chatChartInst) { chatChartInst.destroy(); chatChartInst = null; }
+      chartContainer.style.display = 'none';
+      tableContainer.style.display = 'none';
+      tableContainer.innerHTML = '';
+
+      const { chart_type, x_axis, y_axis, columns, rows } = data;
+      const colIdx = col => columns.indexOf(col);
+
+      if (chart_type === 'table' || !rows || rows.length === 0) {
+        // Render as a table
+        tableContainer.style.display = 'block';
+        if (!rows || rows.length === 0) {
+          tableContainer.innerHTML = '<p style="color:var(--muted);padding:1rem">No data returned.</p>';
+        } else {
+          const tbl = `<table><thead><tr>${columns.map(c=>`<th>${c}</th>`).join('')}</tr></thead><tbody>${
+            rows.map(r=>`<tr>${r.map(v=>`<td>${v??'—'}</td>`).join('')}</tr>`).join('')
+          }</tbody></table>`;
+          tableContainer.innerHTML = tbl;
+        }
+      } else if (chart_type === 'metric') {
+        tableContainer.style.display = 'block';
+        const val = rows[0]?.[0] ?? '—';
+        tableContainer.innerHTML = `<div style="text-align:center;padding:2rem"><div style="font-size:3rem;font-weight:700;color:var(--green)">${Number.isFinite(+val)?Number(val).toLocaleString():val}</div><div style="color:var(--muted);margin-top:0.5rem">${y_axis||columns[0]||''}</div></div>`;
+      } else {
+        // Line or bar
+        chartContainer.style.display = 'block';
+        const xI = colIdx(x_axis) >= 0 ? colIdx(x_axis) : 0;
+        const yI = colIdx(y_axis) >= 0 ? colIdx(y_axis) : 1;
+        const labels = rows.map(r => r[xI]);
+        const values = rows.map(r => r[yI]);
+        const ctx = document.getElementById('chat-chart').getContext('2d');
+        chatChartInst = new Chart(ctx, {
+          type: chart_type === 'pie' ? 'pie' : (chart_type === 'bar' ? 'bar' : 'line'),
+          data: {
+            labels,
+            datasets: [{
+              label: y_axis || columns[yI] || 'value',
+              data: values,
+              backgroundColor: chart_type === 'pie'
+                ? ['#6366f1','#22c55e','#ef4444','#f59e0b','#3b82f6','#8b5cf6','#ec4899']
+                : '#6366f144',
+              borderColor: '#6366f1',
+              borderWidth: 2,
+              fill: chart_type === 'line',
+              tension: 0.3,
+            }]
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: '#94a3b8' } } },
+            scales: chart_type === 'pie' ? {} : {
+              x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#2d3147' } },
+              y: { ticks: { color: '#94a3b8' }, grid: { color: '#2d3147' }, beginAtZero: true }
+            }
+          }
+        });
+      }
+
+      document.getElementById('chat-result').classList.add('visible');
+    }
+
+    // ── Boot ───────────────────────────────────────────────────────────────────
+    async function init() {
+      await Promise.all([loadMetrics(), loadRuns(), loadThroughput()]);
+      // Auto-refresh every 30s
+      setInterval(() => { loadMetrics(); loadRuns(); }, 30_000);
+    }
+
+    init();
+  </script>
+</body>
+</html>
